@@ -1,0 +1,161 @@
+#!/usr/bin/env python3
+"""Run the real File menu module against Studio Qt, without opening Studio.
+
+Select the pinned app/SDK with ROBLOX_STUDIO_APP and ROBLOX_MODLOADER_SOURCE.
+Normal and AddressSanitizer builds exercise the same offscreen Qt harness.
+"""
+
+from pathlib import Path
+import json
+import os
+import platform
+import re
+import shlex
+import subprocess
+import sys
+
+
+def run(arguments: list[str], **kwargs) -> subprocess.CompletedProcess:
+    return subprocess.run(arguments, check=True, **kwargs)
+
+
+def symbols(library: Path, *, undefined: bool = False) -> set[str]:
+    result = run(["/usr/bin/nm", "-u" if undefined else "-gU", str(library)],
+                 capture_output=True, text=True)
+    return {line.split()[-1] for line in result.stdout.splitlines() if line.split()}
+
+
+def write_qt_symbols(frameworks: Path, output: Path) -> None:
+    exported: set[str] = set()
+    for framework in ("QtCore", "QtGui", "QtWidgets"):
+        exported |= symbols(frameworks / f"{framework}.framework" / framework)
+    # Mach-O nm has an extra underscore; dlsym and c++filt use the C++ name.
+    names = sorted(name[1:] for name in exported if name.startswith("_"))
+    demangled = run(["/usr/bin/c++filt"], input="\n".join(names) + "\n",
+                    capture_output=True, text=True).stdout.splitlines()
+    if len(demangled) != len(names):
+        raise RuntimeError("Qt export demangling returned an unexpected number of names.")
+    table: dict[str, str] = {}
+    def abi_alias_rank(name: str) -> tuple[int, str]:
+        # Itanium C1/D1 are complete-object constructor/destructor entrypoints.
+        # C2/D2 are base aliases; D0 would also deallocate our placement storage.
+        match = re.search(r"([CD][0123])E", name)
+        rank = {"C1": 0, "D1": 0, "C2": 1, "D2": 1, "C3": 2, "D0": 3}
+        return (rank.get(match.group(1), 0) if match else 0, name)
+    for signature, name in zip(demangled, names):
+        previous = table.setdefault(signature, name)
+        if previous != name:
+            if not re.search(r"[CD][0123]E", previous) or not re.search(r"[CD][0123]E", name):
+                raise RuntimeError(f"Ambiguous Qt export signature: {signature}")
+            table[signature] = min(previous, name, key=abi_alias_rank)
+    output.write_text("".join("{" + json.dumps(signature) + ", " + json.dumps(name) + "},\n"
+                              for signature, name in sorted(table.items())), encoding="utf-8")
+
+
+def main() -> int:
+    if sys.platform != "darwin" or platform.machine() != "arm64":
+        raise RuntimeError("The File menu harness currently requires macOS arm64 and Studio Qt 5.15.")
+    repository = Path(__file__).resolve().parents[1]
+    studio = Path(os.environ.get("ROBLOX_STUDIO_APP", str(Path.home() / (
+        "Library/Application Support/com.revolution.rml-launcher/studio/versions/"
+        "version-5f7ed526d8884288/RobloxStudio.app"
+    )))).expanduser().resolve()
+    sdk = Path(os.environ.get("ROBLOX_MODLOADER_SOURCE",
+                              str(Path.home() / "Projects/roblox-modloader"))).expanduser().resolve()
+    frameworks = studio / "Contents/Frameworks"
+    rml_library = studio / "Contents/MacOS/roblox_modloader.dylib"
+    qt_source = sdk / "code/roblox_modloader/src/qt"
+    wrappers = [qt_source / f"{name}.cpp" for name in (
+        "qstring", "qarray_data", "qapplication", "qobject", "qmetaobject",
+        "qmenu", "qaction", "qicon", "qmenubar",
+    )]
+    required = [rml_library, qt_source / "qt_connect.cpp", *wrappers,
+                sdk / "code/roblox_modloader/include/RobloxModLoader/qt/qt_module.hpp",
+                *(frameworks / f"{name}.framework" / name for name in ("QtCore", "QtGui", "QtWidgets")),
+                studio / "Contents/Plugins/Qt5/platforms/libqoffscreen.dylib"]
+    missing = [str(path) for path in required if not path.is_file()]
+    if missing:
+        raise RuntimeError("Required pinned Studio/RML files are missing; check ROBLOX_STUDIO_APP "
+                           "and ROBLOX_MODLOADER_SOURCE:\n" + "\n".join(missing))
+    output = repository / ".agent-work/tests/file-menu"
+    output.mkdir(parents=True, exist_ok=True)
+    write_qt_symbols(frameworks, output / "qt_symbols.inc")
+
+    compiler = shlex.split(os.environ.get("CXX", "/usr/bin/clang++"))
+    if not compiler:
+        raise RuntimeError("CXX must name a C++ compiler.")
+    common = [*compiler, "-std=c++23", "-Wall", "-Wextra", "-Werror", "-UNDEBUG",
+              "-ffile-prefix-map=" + str(repository) + "=/src/rml-custom-templates",
+              "-ffile-prefix-map=" + str(sdk) + "=/src/roblox-modloader",
+              "-isystem", str(sdk / "code/roblox_modloader/include"),
+              "-isystem", str(sdk / "code/roblox_modloader/src"), "-I", str(output)]
+
+    # Check exactly the RML symbols used by the current production translation
+    # unit, not a hand-maintained list of SDK method names. The harness below
+    # links source wrappers so it can run independently of loader startup.
+    production_object = output / "TemplateFileMenu.exports.o"
+    run([*common, "-x", "objective-c++", "-fobjc-arc", "-c",
+         str(repository / "native/TemplateFileMenu.mm"), "-o", str(production_object)])
+    needed = {name for name in symbols(production_object, undefined=True)
+              if re.match(r"__Z\S*3rml", name)}
+    if not needed:
+        raise RuntimeError("No RML references found in the production File menu object; review export check.")
+    absent = needed - symbols(rml_library)
+    if absent:
+        raise RuntimeError("The selected installed RML is missing File menu integration exports:\n"
+                           + "\n".join(sorted(absent)))
+    print(f"Verified {len(needed)} production File menu references against installed RML exports.", flush=True)
+
+    # The PCH is unused by qt_connect.cpp's implementation. Skip that PCH's
+    # monolithic loader dependencies while compiling the entire real source.
+    # No signal/slot implementation is copied into the harness.
+    common_header = sdk / "code/roblox_modloader/include/RobloxModLoader/internal/common.hpp"
+    if "#ifndef COMMON_INC" not in common_header.read_text(encoding="utf-8"):
+        raise RuntimeError("The RML PCH guard changed; review the standalone Qt connection build.")
+    environment = os.environ.copy()
+    environment.update(ROBLOX_STUDIO_APP=str(studio), QT_QPA_PLATFORM="offscreen",
+                       QT_PLUGIN_PATH=str(studio / "Contents/Plugins/Qt5"))
+    for name, flags in (("normal", ["-O1"]),
+                        ("asan", ["-g", "-O0", "-fsanitize=address", "-fno-omit-frame-pointer"])):
+        connection_object = output / f"qt_connect_{name}.o"
+        run([*common, *flags, "-DCOMMON_INC", "-c", str(qt_source / "qt_connect.cpp"),
+             "-o", str(connection_object)])
+        executable = output / f"native_file_menu_{name}"
+        run([*common, *flags, "-x", "objective-c++", "-fobjc-arc",
+             str(repository / "tests/native_file_menu.mm"), "-x", "c++", *(str(path) for path in wrappers),
+             "-x", "none", str(connection_object), "-F", str(frameworks),
+             "-framework", "QtWidgets", "-framework", "QtGui", "-framework", "QtCore",
+             "-framework", "Foundation", "-Wl,-rpath," + str(frameworks), "-o", str(executable)])
+        if name == "asan":
+            environment["ASAN_OPTIONS"] = ":".join(value for value in (
+                environment.get("ASAN_OPTIONS"), "abort_on_error=1:halt_on_error=1:detect_leaks=0",
+            ) if value)
+        print(f"Running File menu harness ({name}).", flush=True)
+        run([str(executable)], env=environment)
+
+    # If the full native helper has already been built, also verify the C ABI
+    # entrypoints used by its managed caller. No artifact is built/installed here.
+    native_library = Path(os.environ.get("CTPL_NATIVE_LIBRARY", str(
+        repository / ".agent-work/native/libCustomTemplatesUI.dylib"))).expanduser()
+    if native_library.is_file():
+        required_exports = {"_" + name for name in (
+            "ctpl_start", "ctpl_stop", "ctpl_poll_command", "ctpl_snapshot_current", "ctpl_show_notice", "ctpl_open_template",
+        )}
+        absent = required_exports - symbols(native_library)
+        if absent:
+            raise RuntimeError("Built native helper is missing current-save integration exports:\n"
+                               + "\n".join(sorted(absent)))
+        print("Verified built native helper current-save C ABI exports.", flush=True)
+    elif "CTPL_NATIVE_LIBRARY" in os.environ:
+        raise RuntimeError(f"CTPL_NATIVE_LIBRARY does not exist: {native_library}")
+    else:
+        print("Native helper C ABI check skipped (no built helper); Qt/RML checks passed.", flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
+        print(f"File menu tests failed: {error}", file=sys.stderr)
+        raise SystemExit(1)

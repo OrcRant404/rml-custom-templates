@@ -1,0 +1,5 @@
+.agent-work/
+**/bin/
+**/obj/
+.DS_Store
+__pycache__/

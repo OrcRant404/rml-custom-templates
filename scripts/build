@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+repository="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)"
+runtime="${RobloxModLoaderRuntime:-${HOME}/Library/Application Support/com.revolution.rml-launcher/studio/versions/version-5f7ed526d8884288/RobloxStudio.app/Contents/MacOS/RobloxModLoader/runtime}"
+dotnet build "${repository}/CustomTemplates.csproj" -c Release -p:RobloxModLoaderRuntime="${runtime}" --nologo
+payload="${repository}/.agent-work/payload/mods/custom-templates/dotnet"
+mkdir -p "${payload}"
+python3 "${repository}/native/build.py"
+cp "${repository}/bin/Release/net10.0/CustomTemplates.dll" "${payload}/CustomTemplates.dll"
+cp "${repository}/.agent-work/native/libCustomTemplatesUI.dylib" "${payload}/libCustomTemplatesUI.dylib"
+rm -f "${repository}/.agent-work/payload/mods/custom-templates/CustomTemplates.dll"
+printf 'Managed payload: %s/CustomTemplates.dll\n' "${payload}"

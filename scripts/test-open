@@ -1,0 +1,50 @@
+#!/usr/bin/env python3
+"""Test production template-open ownership/correlation without starting Studio."""
+from pathlib import Path
+import os
+import re
+import shlex
+import struct
+import subprocess
+
+root=Path(__file__).resolve().parents[1]
+studio=Path(os.environ.get("ROBLOX_STUDIO_APP",str(Path.home()/(
+    "Library/Application Support/com.revolution.rml-launcher/studio/versions/"
+    "version-5f7ed526d8884288/RobloxStudio.app")))).expanduser()
+binary=(studio/"Contents/MacOS/RobloxStudio").read_bytes()
+if struct.unpack_from("<II",binary)!= (0xfeedfacf,0x100000c):
+    raise SystemExit("Template opening requires the pinned ARM64 Studio Mach-O executable.")
+segments=[]
+position=32
+for _ in range(struct.unpack_from("<I",binary,16)[0]):
+    command,size=struct.unpack_from("<II",binary,position)
+    if command==0x19:
+        address,_,offset,length=struct.unpack_from("<QQQQ",binary,position+24)
+        segments.append((address,offset,length))
+    position+=size
+source=(root/"native/TemplateOpen.mm").read_text()
+fingerprints=re.findall(r'\{(0x[0-9a-f]+),"([0-9a-f]+)"\}',source)
+if len(fingerprints)<15:
+    raise SystemExit("Production native-entry fingerprints changed; review test extraction.")
+for address,hex_bytes in fingerprints:
+    address=int(address,16)
+    expected=bytes.fromhex(hex_bytes)
+    matches=[offset+address-start for start,offset,length in segments if start<=address<start+length]
+    if len(matches)!=1 or binary[matches[0]:matches[0]+len(expected)]!=expected:
+        raise SystemExit(f"Production native-entry fingerprint does not match pinned Studio: {address:#x}")
+print(f"Pinned Studio: {len(fingerprints)} production native-entry fingerprints match.",flush=True)
+output=root/".agent-work/tests/template-open"
+output.mkdir(parents=True,exist_ok=True)
+compiler=shlex.split(os.environ.get("CXX","/usr/bin/clang++"))
+if not compiler:
+    raise SystemExit("CXX must name a C++ compiler.")
+executable=output/"native_template_open"
+subprocess.run([*compiler,"-std=c++23","-Wall","-Wextra","-Werror","-g0",
+    "-fsanitize=address,undefined","-fno-omit-frame-pointer",
+    "-ffile-prefix-map="+str(root)+"=/src/rml-custom-templates",
+    "-I",str(root/"native"),str(root/"tests/native_template_open.cpp"),"-o",str(executable)],check=True)
+environment=os.environ.copy()
+for key,value in (("ASAN_OPTIONS","abort_on_error=1:halt_on_error=1"),
+                  ("UBSAN_OPTIONS","halt_on_error=1:print_stacktrace=1")):
+    environment[key]=":".join(filter(None,(environment.get(key),value)))
+subprocess.run([str(executable)],check=True,env=environment)

@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+rml_source=${ROBLOX_MODLOADER_SOURCE:-"$HOME/Projects/roblox-modloader"}
+mkdir -p "$project_dir/.agent-work/tests"
+for suite in native_actions native_ui_parity; do
+  output="$project_dir/.agent-work/tests/$suite"
+  /usr/bin/clang++ -x objective-c++ -std=c++23 -fobjc-arc -Wall -Wextra -Werror \
+    -I "$rml_source/code/roblox_modloader/include" \
+    -I "$rml_source/code/roblox_modloader/src" \
+    "$project_dir/tests/$suite.mm" -framework Foundation -o "$output"
+  "$output"
+done

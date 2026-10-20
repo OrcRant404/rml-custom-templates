@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+repository="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)"
+dotnet run --project "${repository}/tests/CustomTemplates.Tests.csproj" -c Release -- "${repository}/.agent-work/tests"

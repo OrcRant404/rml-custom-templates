@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>CustomTemplates</AssemblyName>
+    <RootNamespace>CustomTemplates</RootNamespace>
+    <Version>0.3.1</Version>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <RobloxModLoaderRuntime Condition="'$(RobloxModLoaderRuntime)' == ''">$(HOME)/Library/Application Support/com.revolution.rml-launcher/studio/versions/version-5f7ed526d8884288/RobloxStudio.app/Contents/MacOS/RobloxModLoader/runtime</RobloxModLoaderRuntime>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+    <Deterministic>true</Deterministic>
+    <PathMap>$(MSBuildThisFileDirectory)=/src/rml-custom-templates/</PathMap>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="src/**/*.cs" />
+    <Reference Include="RML.Core" HintPath="$(RobloxModLoaderRuntime)/RML.Core.dll" Private="false" />
+    <Reference Include="RML.Logging" HintPath="$(RobloxModLoaderRuntime)/RML.Logging.dll" Private="false" />
+    <Reference Include="Roblox" HintPath="$(RobloxModLoaderRuntime)/Roblox.dll" Private="false" />
+  </ItemGroup>
+  <Target Name="ValidateRuntime" BeforeTargets="ResolveReferences"
+          Condition="!Exists('$(RobloxModLoaderRuntime)/RML.Core.dll') Or !Exists('$(RobloxModLoaderRuntime)/Roblox.dll') Or !Exists('$(RobloxModLoaderRuntime)/RML.Logging.dll')">
+    <Error Text="RML runtime missing at '$(RobloxModLoaderRuntime)'. Set RobloxModLoaderRuntime or pass -p:RobloxModLoaderRuntime=/absolute/runtime/path." />
+  </Target>
+</Project>
