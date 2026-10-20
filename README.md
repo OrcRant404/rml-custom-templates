@@ -61,11 +61,19 @@ This mod targets macOS ARM64, Studio **0.741.19.7411056**, and RML revision **5d
 
 ## Install the download
 
-Extract the ZIP, close Studio, then run `python3 scripts/install.py` from the extracted `rml-custom-templates` folder. The download includes the built mod. Restart Studio with `rml-studio`.
+Install the matching [RML loader](https://github.com/OrcRant404/roblox-modloader/releases) first. Extract this mod's ZIP, close Studio, then run this from the extracted `rml-custom-templates` folder:
+
+```sh
+python3 scripts/install.py --app "/absolute/path/to/RobloxStudio.app"
+```
+
+The download includes the built mod. Open that same Studio app after installation. If you already use the RML manager, omitting `--app` selects its default managed installation; `rml-studio` is an optional local launch command, not a prerequisite.
 
 ## Build from source
 
 Requires the matching RML Studio, .NET 10, Xcode command-line tools, and the local RML SDK source. Close Studio before installing.
+
+For a Studio/SDK outside the default local paths, set `ROBLOX_STUDIO_APP` to the compatible app, `ROBLOX_MODLOADER_SOURCE` to the loader source checkout, and `RobloxModLoaderRuntime` to the app's `Contents/MacOS/RobloxModLoader/runtime` directory. If needed, set `RML_SPDLOG_INCLUDE` to a directory containing `spdlog/spdlog.h`.
 
 ```sh
 ./scripts/build
