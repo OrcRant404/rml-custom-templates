@@ -57,6 +57,8 @@ A private, rebuildable image cache at `/Library/Caches/RobloxCustomTemplates-<us
 
 Automatic capture requires macOS 14.4 or later. Keep the capture document open and the Studio window visible and unminimized until its thumbnail is saved. It captures only the verified Studio window and crops to the 3D viewport. A short settling delay is used; it does not guarantee every remote asset has loaded. You can recapture later or choose a PNG.
 
+The loader has its own OS requirement: the current fork's prebuilt macOS loader requires **macOS 26.0+**. Follow the loader release's minimum OS even though this mod's capture backend supports 14.4+.
+
 This mod targets macOS ARM64, Studio **0.741.19.7411056**, and RML revision **5d3090ad93ca8b212ca859fea5b1dca3e2e0fe1b**. The native helper checks the Studio version, scheduler vtable, and method bytes before enabling its hook. Other Studio builds require an updated mod. The mod extends the mounted Templates interface without replacing the bundled StartPage plugin. The helper supplies Qt editors and creates new places through Studio's native document machinery.
 
 ## Install the download
